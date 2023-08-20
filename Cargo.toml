@@ -1,0 +1,3 @@
+[workspace]
+members = ["app", "short"]
+package.authors = ["Barrett Ray"]
