@@ -5,18 +5,20 @@
 use std::path::PathBuf;
 
 use thiserror::Error;
-use tracing::warn;
+use tracing::{debug, info, instrument, warn};
 use url::Url;
-use urlencoding::encode;
 use uuid::Uuid;
 
 /// The LinkManager is a way to easily integrate `direction` into your own projects!
 /// It will create a database of links, then add them to it for later recollection/editing.
+#[derive(Debug)]
 struct LinkManager {
     db: sled::Db,
 }
 
 impl LinkManager {
+    /// Attempts to create a new LinkManager.
+    #[instrument]
     async fn create(db_location: Option<PathBuf>) -> Result<Self, LinkError> {
         let location = match db_location {
             Some(path) => path,
@@ -29,8 +31,43 @@ impl LinkManager {
             }
         };
 
+        info!(
+            "A LinkManager has been created or accessed at the following location: {}",
+            &location.display()
+        );
+
         Ok(LinkManager {
             db: sled::open(location)?,
+        })
+    }
+
+    /// Tries to generate a shorter link from a given link.
+    #[instrument(skip(link))]
+    pub async fn generate_link(
+        &self,
+        link: impl AsRef<str>,
+        aliases: Option<Vec<String>>,
+    ) -> Result<Link, LinkError> {
+        let link = link.as_ref(); // allow all kinds of strings :)
+
+        let original_link = Url::parse(link)?;
+        let identifier = Uuid::new_v4();
+
+        // deal with aliases
+        let aliases = aliases.map(|list| {
+            list.iter()
+                .map(|s| urlencoding::encode(s).to_string())
+                .collect()
+        });
+
+        // TODO: actually make links shorten!
+        let shortened_link = "farts".into();
+
+        Ok(Link {
+            identifier,
+            original_link,
+            shortened_link,
+            aliases,
         })
     }
 }
@@ -38,12 +75,15 @@ impl LinkManager {
 /// A representation of some given link to be shortened.
 /// The original link is a full URL, while the shortened link is just a "shortcut" which returns the original.
 /// Aliases include all other redirected, and can include named/speciality links (if enabled) or other random links.
+#[allow(unused)]
 pub struct Link {
     identifier: Uuid,
     original_link: Url,
     shortened_link: String,
     aliases: Option<Vec<String>>,
 }
+
+/// An error that occurs when handling links.
 #[derive(Error, Debug)]
 pub enum LinkError {
     #[error("failed to parse given url")]
@@ -52,55 +92,32 @@ pub enum LinkError {
     DbAccessFailure(#[from] sled::Error),
 }
 
-impl Link {
-    /// Tries to generate a shorter link from a given link.
-    pub async fn generate(
-        link: impl AsRef<str>,
-        aliases: Option<Vec<String>>,
-    ) -> Result<Link, LinkError> {
-        let link = link.as_ref(); // allow all kinds of strings :)
-        let mut aliases = aliases.clone();
-
-        let original_link = Url::parse(link)?;
-        let identifier = Uuid::new_v4();
-
-        // deal with aliases
-        if let Some(list) = aliases {
-            list.iter_mut().for_each(|s| *s = encode(&s).to_string());
-        }
-
-        // jesus christ
-        tracing::debug!(
-            "first element of aliases: {}",
-            aliases
-                .unwrap_or(vec!("no aliases given".to_string()))
-                .get(0)
-                .unwrap_or(&"".to_string())
-        );
-
-        Ok(Link {
-            identifier,
-            original_link,
-            shortened_link: a,
-            aliases,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use tracing::Level;
+    use tracing_test::traced_test;
+
     #[allow(unused)]
     use super::*;
 
     #[tokio::test]
+    #[traced_test]
     async fn try_generation() {
+        #![allow(unused_must_use)]
+        tracing_subscriber::fmt::fmt()
+            .with_max_level(Level::TRACE)
+            .finish();
+
+        let lm = LinkManager::create(None).await.unwrap();
+
         // Let's try to generate 20 links, then see what comes out!
         let our_link = String::from("https://farts.google.com");
-        Link::generate(our_link.clone(), None).await;
-        Link::generate(&our_link, None).await;
+
+        lm.generate_link(our_link.clone(), None).await;
+        lm.generate_link(&our_link, None).await;
 
         // how about Cow?
         let moooo = std::borrow::Cow::from("https://put.that.thang/away");
-        Link::generate(moooo, None).await;
+        lm.generate_link(moooo, None).await;
     }
 }
